@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Proper Pinned Tabs",
   "short_name": "Proper Pinned Tabs",
-  "version": "1.0.8",
-  "description": "Safari-style global pinned tabs: save pinned URLs and restore them in every normal window.",
+  "version": "1.1.0",
+  "description": "Safari-style global pinned tabs: pins are saved and kept in sync across every normal window.",
   "permissions": ["tabs", "storage"],
   "background": {
     "service_worker": "background.js",
