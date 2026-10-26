@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  addAlias,
   addPinToList,
   dedupeUrlList,
   isRestrictedUrl,
   normalizeUrlKey,
   planReconcile,
-  pruneAliases,
+  pruneLocations,
   removeKeyFromList,
+  setLocation,
   shouldRemoveOnTabClosed,
 } from "../lib/pin-logic.js";
 
@@ -103,15 +103,33 @@ describe("stored pin list", () => {
     assert.deepEqual(out.list, ["https://b.example/"]);
   });
 
-  it("aliases are capped, deduped and pruned with their pin", () => {
-    let aliases = {};
-    for (let i = 0; i < 8; i++) {
-      aliases = addAlias(aliases, "a.example/", `https://a.example/p${i}`).aliases;
-    }
-    assert.equal(aliases["a.example/"].length, 5);
-    assert.equal(addAlias(aliases, "a.example/", "https://a.example/p7").changed, false);
-    assert.equal(addAlias(aliases, "a.example/", "https://a.example/").changed, false);
-    assert.deepEqual(pruneAliases(aliases, []).aliases, {});
+  it("locations keep one current URL per tab and nothing for unmoved pins", () => {
+    let { locations } = setLocation({}, "s:1", "a.example/", "https://other.example/x");
+    ({ locations } = setLocation(locations, "s:1", "a.example/", "https://other.example/y"));
+    assert.deepEqual(locations, {
+      "s:1": { key: "a.example/", url: "https://other.example/y" },
+    });
+    // Back on the saved URL (or a restricted page): entry is dropped.
+    assert.deepEqual(setLocation(locations, "s:1", "a.example/", "https://a.example").locations, {});
+    assert.deepEqual(setLocation(locations, "s:1", "a.example/", "chrome://newtab").locations, {});
+    assert.equal(setLocation({}, "s:1", "a.example/", "https://a.example/").changed, false);
+  });
+
+  it("pruneLocations drops removed pins and, if asked, tabs not kept", () => {
+    const locations = {
+      "s:1": { key: "a.example/", url: "https://x.example/" },
+      "s:2": { key: "gone.example/", url: "https://y.example/" },
+      "old:7": { key: "a.example/", url: "https://z.example/" },
+    };
+    const saved = ["https://a.example/"];
+    assert.deepEqual(Object.keys(pruneLocations(locations, { savedUrls: saved }).locations), [
+      "s:1",
+      "old:7",
+    ]);
+    assert.deepEqual(
+      Object.keys(pruneLocations(locations, { savedUrls: saved, keepIds: new Set(["s:1"]) }).locations),
+      ["s:1"]
+    );
   });
 });
 
@@ -198,13 +216,28 @@ describe("planReconcile", () => {
     assert.deepEqual(plan.actions.map((a) => a.type), ["create"]);
   });
 
-  it("binds a navigated pin by remembered alias", () => {
+  it("binds a navigated pin by its last known location", () => {
     const plan = planReconcile({
       savedUrls: ["https://a.example/"],
-      aliases: { "a.example/": ["other.example/work"] },
+      locations: { "old:4": { key: "a.example/", url: "https://other.example/work" } },
       tabs: [{ id: 3, pinned: true, url: "https://other.example/work", index: 0 }],
     });
-    assert.deepEqual(plan.actions, [{ type: "bind", tabId: 3, key: "a.example/" }]);
+    assert.deepEqual(plan.actions, [
+      { type: "bind", tabId: 3, key: "a.example/", locationId: "old:4" },
+    ]);
+  });
+
+  it("each location is claimed by at least one tab, never a covered pin", () => {
+    const plan = planReconcile({
+      savedUrls: ["https://a.example/"],
+      bindings: { 1: "a.example/" },
+      locations: { "old:4": { key: "a.example/", url: "https://other.example/" } },
+      tabs: [
+        { id: 1, pinned: true, url: "https://a.example/", index: 0 },
+        { id: 3, pinned: true, url: "https://other.example/", index: 1 },
+      ],
+    });
+    assert.deepEqual(plan.actions, []);
   });
 
   it("binds by host only when unambiguous on both sides", () => {

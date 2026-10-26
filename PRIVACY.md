@@ -5,7 +5,7 @@
 ## What we store
 
 - The **URLs** of tabs you pin, in the order you pinned them.
-- For each pin, the **last few (at most 5) URLs** that pinned tab navigated to, so the extension can still recognize the pin after a browser restart. These are deleted when you remove the pin.
+- For each **open** pinned tab that has navigated away from its saved URL, the **single URL it is currently on** (no history is kept; each navigation overwrites it). This lets the extension recognize the pin after a browser restart or extension update. The entry is deleted when the tab returns to its saved URL, when you unpin or close it, and when it is not found after a restart.
 
 This data is saved in `chrome.storage.local` on **your browser profile** on this device. Which open tab belongs to which pin is kept in `chrome.storage.session` and cleared when the browser closes.
 

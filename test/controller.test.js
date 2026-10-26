@@ -292,6 +292,84 @@ describe("conservative restore", () => {
     await b2.settle(ctl2);
     assert.deepEqual(b2.pinnedUrls(w), ["https://elsewhere.example/work"]);
     assert.ok(Object.values(ctl2.bindings).includes("a.example/"));
+    // The old entry was claimed and re-keyed to the restored tab: still one.
+    const entries = Object.values(b2.chrome.storage.local.data.pinLocations);
+    assert.deepEqual(entries, [{ key: "a.example/", url: "https://elsewhere.example/work" }]);
+  });
+
+  it("locations of pins that were not restored are pruned after startup", async () => {
+    const b = createBrowser();
+    Object.assign(b.chrome.storage.local.data, {
+      pinStateInitialized: true,
+      pinnedUrls: ["https://a.example/"],
+      pinLocations: { "old:5": { key: "a.example/", url: "https://gone.example/" } },
+    });
+    const w = b.openWindow({ fireEvent: false });
+    const ctl = createPinController({
+      chrome: b.chrome,
+      setTimer: b.setTimer,
+      clearTimer: b.clearTimer,
+      log: noop,
+      warn: noop,
+    });
+    ctl.start();
+    b.chrome.runtime.onStartup.fire();
+    await b.settle(ctl);
+    assert.deepEqual(b.pinnedUrls(w), ["https://a.example/"]);
+    assert.deepEqual(b.chrome.storage.local.data.pinLocations, {});
+  });
+
+  it("stores only the current URL of navigated pins, never history", async () => {
+    const { b, ctl, winIds } = await setup({
+      saved: ["https://a.example/"],
+      windows: [{}, {}],
+    });
+    const [w1, w2] = winIds;
+    const t1 = tabIdByUrl(b, w1, "https://a.example/");
+    const t2 = tabIdByUrl(b, w2, "https://a.example/");
+    for (const u of ["https://x.example/1", "https://x.example/2", "https://x.example/3"]) {
+      b.navigate(t1, u);
+    }
+    b.navigate(t2, "https://y.example/");
+    await b.settle(ctl);
+    const urls = () =>
+      Object.values(b.chrome.storage.local.data.pinLocations || {}).map((e) => e.url).sort();
+    assert.deepEqual(urls(), ["https://x.example/3", "https://y.example/"]);
+
+    b.navigate(t2, "https://a.example/");
+    await b.settle(ctl);
+    assert.deepEqual(urls(), ["https://x.example/3"]);
+
+    b.unpin(t1);
+    await b.settle(ctl);
+    assert.deepEqual(urls(), []);
+  });
+
+  it("extension update (session storage wiped) re-recognizes navigated pins", async () => {
+    const { b, ctl, winIds } = await setup({
+      saved: ["https://a.example/"],
+      windows: [{}],
+    });
+    const id = tabIdByUrl(b, winIds[0], "https://a.example/");
+    b.navigate(id, "https://elsewhere.example/");
+    await b.settle(ctl);
+    b.killWorker();
+    for (const k of Object.keys(b.chrome.storage.session.data)) {
+      delete b.chrome.storage.session.data[k];
+    }
+    const ctl2 = createPinController({
+      chrome: b.chrome,
+      setTimer: b.setTimer,
+      clearTimer: b.clearTimer,
+      log: noop,
+      warn: noop,
+    });
+    ctl2.start();
+    b.chrome.runtime.onInstalled.fire({ reason: "update" });
+    await b.settle(ctl2);
+    assert.deepEqual(b.pinnedUrls(winIds[0]), ["https://elsewhere.example/"]);
+    assert.deepEqual(ctl2.bindings, { [id]: "a.example/" });
+    assert.equal(Object.keys(b.chrome.storage.local.data.pinLocations).length, 1);
   });
 
   it("our early copy yields when the browser restores the real pin late", async () => {
