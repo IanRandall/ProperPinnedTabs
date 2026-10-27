@@ -240,32 +240,32 @@ describe("planReconcile", () => {
     assert.deepEqual(plan.actions, []);
   });
 
-  it("binds by host only when unambiguous on both sides", () => {
-    const one = planReconcile({
+  it("does not bind a different path on the same host without a location", () => {
+    const plan = planReconcile({
       savedUrls: ["https://a.example/"],
       tabs: [{ id: 3, pinned: true, url: "https://a.example/deep", index: 0 }],
     });
-    assert.deepEqual(one.actions, [{ type: "bind", tabId: 3, key: "a.example/" }]);
-
-    const twoKeys = planReconcile({
-      savedUrls: ["https://a.example/x", "https://a.example/y"],
-      tabs: [{ id: 3, pinned: true, url: "https://a.example/deep", index: 0 }],
-    });
-    assert.equal(types(twoKeys, "bind").length, 0);
-    assert.equal(types(twoKeys, "create").length, 2);
-
-    const twoTabs = planReconcile({
-      savedUrls: ["https://a.example/"],
-      tabs: [
-        { id: 3, pinned: true, url: "https://a.example/1", index: 0 },
-        { id: 4, pinned: true, url: "https://a.example/2", index: 1 },
-      ],
-    });
-    assert.equal(types(twoTabs, "bind").length, 0);
+    assert.equal(types(plan, "bind").length, 0);
+    assert.deepEqual(types(plan, "create").map((a) => a.url), ["https://a.example/"]);
   });
 
-  it("an untouched copy we created yields to a restored real pin", () => {
-    const plan = planReconcile({
+  it("an untouched copy we created yields only when a location backs the restored tab", () => {
+    const backed = planReconcile({
+      savedUrls: ["https://a.example/"],
+      bindings: { 9: "a.example/" },
+      createdTabIds: [9],
+      locations: { "old:3": { key: "a.example/", url: "https://a.example/inbox" } },
+      tabs: [
+        { id: 9, pinned: true, url: "https://a.example/", index: 0 },
+        { id: 3, pinned: true, url: "https://a.example/inbox", index: 1 },
+      ],
+    });
+    assert.deepEqual(backed.actions, [
+      { type: "close", tabId: 9, key: "a.example/" },
+      { type: "bind", tabId: 3, key: "a.example/", locationId: "old:3" },
+    ]);
+
+    const stranger = planReconcile({
       savedUrls: ["https://a.example/"],
       bindings: { 9: "a.example/" },
       createdTabIds: [9],
@@ -274,10 +274,7 @@ describe("planReconcile", () => {
         { id: 3, pinned: true, url: "https://a.example/inbox", index: 1 },
       ],
     });
-    assert.deepEqual(plan.actions, [
-      { type: "close", tabId: 9, key: "a.example/" },
-      { type: "bind", tabId: 3, key: "a.example/" },
-    ]);
+    assert.deepEqual(stranger.actions, []);
   });
 
   it("a created copy the user navigated is never closed as a duplicate", () => {
