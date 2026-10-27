@@ -408,3 +408,83 @@ describe("first run", () => {
     assert.deepEqual(b.saved, []);
   });
 });
+
+describe("startup edge cases", () => {
+  const tick = () => new Promise((r) => setImmediate(r));
+  const newController = (b) =>
+    createPinController({
+      chrome: b.chrome,
+      setTimer: b.setTimer,
+      clearTimer: b.clearTimer,
+      log: noop,
+      warn: noop,
+    });
+
+  it("closing a restored pin right after startup removes it from storage", async () => {
+    const b = createBrowser();
+    b.chrome.storage.local.data.pinnedUrls = ["https://a.example/"];
+    b.chrome.storage.local.data.pinStateInitialized = true;
+    const w = b.openWindow({ pinnedUrls: ["https://a.example/"], fireEvent: false });
+    const ctl = newController(b);
+    ctl.start();
+    // Only the queue drains: no delayed reconcile timer has fired yet.
+    for (let i = 0; i < 5; i++) await tick();
+    await ctl.idle();
+
+    b.closeTab(tabIdByUrl(b, w, "https://a.example/"));
+    await b.settle(ctl);
+    assert.deepEqual(b.saved, []);
+    assert.deepEqual(b.pinnedUrls(w), []);
+  });
+
+  it("a restored pinned tab created after startup is bound before timers run", async () => {
+    const b = createBrowser();
+    b.chrome.storage.local.data.pinnedUrls = ["https://a.example/"];
+    b.chrome.storage.local.data.pinStateInitialized = true;
+    const w = b.openWindow({ fireEvent: false });
+    const ctl = newController(b);
+    ctl.start();
+    for (let i = 0; i < 5; i++) await tick();
+    await ctl.idle();
+
+    const id = b.openTab(w, "https://a.example/", { pinned: true });
+    for (let i = 0; i < 5; i++) await tick();
+    await ctl.idle();
+    assert.equal(ctl.bindings[id], "a.example/");
+    // Binding alone must not create copies while the browser is restoring.
+    assert.deepEqual(b.pinnedUrls(w), ["https://a.example/"]);
+
+    b.closeTab(id);
+    await b.settle(ctl);
+    assert.deepEqual(b.saved, []);
+  });
+});
+
+describe("pinning a tab without a usable URL", () => {
+  it("still saves the pin when it navigates after the worker slept", async () => {
+    const { b, ctl, winIds } = await setup({
+      saved: [],
+      windows: [{ urls: ["chrome://newtab/"] }, {}],
+    });
+    const id = tabIdByUrl(b, winIds[0], "chrome://newtab/");
+    b.pin(id);
+    await b.settle(ctl);
+    assert.deepEqual(b.saved, []);
+
+    b.killWorker();
+    const ctl2 = createPinController({
+      chrome: b.chrome,
+      setTimer: b.setTimer,
+      clearTimer: b.clearTimer,
+      log: noop,
+      warn: noop,
+    });
+    ctl2.start();
+    await b.settle(ctl2);
+    b.navigate(id, "https://late.example/");
+    await b.settle(ctl2);
+
+    assert.deepEqual(b.saved, ["https://late.example/"]);
+    assert.deepEqual(b.pinnedUrls(winIds[1]), ["https://late.example/"]);
+  });
+});
