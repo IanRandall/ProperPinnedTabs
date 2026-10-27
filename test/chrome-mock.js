@@ -166,15 +166,16 @@ export function createBrowser() {
       if (t) t.cancelled = true;
     },
 
-    /** Drain events, the controller queue and all virtual timers. */
-    async settle(ctl) {
+    /**
+     * Drain events and the controller queue. `selectDue` picks the next timer
+     * to fire; when it returns nothing, the loop stops.
+     */
+    async drain(ctl, selectDue) {
       for (let guard = 0; guard < 200; guard++) {
         for (let i = 0; i < 5; i++) await tick();
         if (ctl) await ctl.idle();
         for (let i = 0; i < 5; i++) await tick();
-        const due = timers
-          .filter((t) => !t.cancelled)
-          .sort((a, b) => a.at - b.at)[0];
+        const due = selectDue();
         if (!due) {
           if (ctl) await ctl.idle();
           return;
@@ -183,7 +184,25 @@ export function createBrowser() {
         now = Math.max(now, due.at);
         due.fn();
       }
-      throw new Error("settle: did not converge");
+      throw new Error("drain: did not converge");
+    },
+
+    /** Drain events, the controller queue and all virtual timers. */
+    settle(ctl) {
+      return browser.drain(ctl, () =>
+        timers.filter((t) => !t.cancelled).sort((a, b) => a.at - b.at)[0]
+      );
+    },
+
+    /** Move the virtual clock forward, firing only timers due by then. */
+    async advance(ms, ctl) {
+      const target = now + ms;
+      await browser.drain(ctl, () =>
+        timers
+          .filter((t) => !t.cancelled && t.at <= target)
+          .sort((a, b) => a.at - b.at)[0]
+      );
+      now = Math.max(now, target);
     },
 
     // ---- user actions (fire events like the browser does) ----

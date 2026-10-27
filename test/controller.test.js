@@ -372,19 +372,22 @@ describe("conservative restore", () => {
     assert.equal(Object.keys(b.chrome.storage.local.data.pinLocations).length, 1);
   });
 
-  it("our early copy yields when the browser restores the real pin late", async () => {
+  it("a same-host tab without a location does not replace the pin we created", async () => {
     const { b, ctl, winIds } = await setup({
       saved: ["https://a.example/"],
       windows: [{}],
     });
-    // A window reopened (e.g. Ctrl+Shift+T): we create a pin first...
     const w = b.openWindow();
     await b.settle(ctl);
     assert.deepEqual(b.pinnedUrls(w), ["https://a.example/"]);
-    // ...then the browser restores the original, navigated-on-same-host pin.
-    b.openTab(w, "https://a.example/inbox/42", { pinned: true });
+    const stranger = b.openTab(w, "https://a.example/inbox/42", { pinned: true });
     await b.settle(ctl);
-    assert.deepEqual(b.pinnedUrls(w), ["https://a.example/inbox/42"]);
+    assert.deepEqual(b.pinnedUrls(w).sort(), [
+      "https://a.example/",
+      "https://a.example/inbox/42",
+    ]);
+    assert.equal(ctl.bindings[tabIdByUrl(b, w, "https://a.example/")], "a.example/");
+    assert.equal(ctl.bindings[stranger], undefined);
     assert.deepEqual(b.pinnedUrls(winIds[0]), ["https://a.example/"]);
     assert.deepEqual(b.saved, ["https://a.example/"]);
   });
@@ -486,5 +489,76 @@ describe("pinning a tab without a usable URL", () => {
 
     assert.deepEqual(b.saved, ["https://late.example/"]);
     assert.deepEqual(b.pinnedUrls(winIds[1]), ["https://late.example/"]);
+  });
+});
+
+describe("same-host strangers and late restore", () => {
+  const tick = () => new Promise((r) => setImmediate(r));
+  const newController = (b) =>
+    createPinController({
+      chrome: b.chrome,
+      setTimer: b.setTimer,
+      clearTimer: b.clearTimer,
+      log: noop,
+      warn: noop,
+    });
+
+  it("a same-host stranger at wake does not steal the pin", async () => {
+    const b = createBrowser();
+    b.chrome.storage.local.data.pinnedUrls = ["https://a.example/"];
+    b.chrome.storage.local.data.pinStateInitialized = true;
+    const w = b.openWindow({
+      pinnedUrls: ["https://a.example/other"],
+      urls: [],
+      fireEvent: false,
+    });
+    const ctl = newController(b);
+    ctl.start();
+    // Immediate bind only: startup timers have not created anything yet.
+    for (let i = 0; i < 5; i++) await tick();
+    await ctl.idle();
+
+    const stranger = tabIdByUrl(b, w, "https://a.example/other");
+    assert.equal(ctl.bindings[stranger], undefined);
+    assert.deepEqual(b.pinnedUrls(w), ["https://a.example/other"]);
+
+    const real = b.openTab(w, "https://a.example/", { pinned: true });
+    for (let i = 0; i < 5; i++) await tick();
+    await ctl.idle();
+
+    assert.equal(ctl.bindings[real], "a.example/");
+    assert.equal(ctl.bindings[stranger], undefined);
+    assert.deepEqual(b.pinnedUrls(w).sort(), ["https://a.example/", "https://a.example/other"]);
+    assert.deepEqual(b.saved, ["https://a.example/"]);
+  });
+
+  it("a late cross-site restore keeps its location and does not duplicate", async () => {
+    const b = createBrowser();
+    Object.assign(b.chrome.storage.local.data, {
+      pinStateInitialized: true,
+      pinnedUrls: ["https://a.example/"],
+      pinLocations: { "old:5": { key: "a.example/", url: "https://elsewhere.example/work" } },
+    });
+    const w = b.openWindow({ fireEvent: false });
+    const ctl = newController(b);
+    ctl.start();
+    b.chrome.runtime.onStartup.fire();
+    // Past the 3s startup pass, before the 10s idle prune.
+    await b.advance(4000, ctl);
+
+    assert.deepEqual(b.pinnedUrls(w), ["https://a.example/"]);
+    assert.deepEqual(b.chrome.storage.local.data.pinLocations["old:5"], {
+      key: "a.example/",
+      url: "https://elsewhere.example/work",
+    });
+
+    b.openTab(w, "https://elsewhere.example/work", { pinned: true });
+    await b.advance(500, ctl);
+
+    assert.deepEqual(b.pinnedUrls(w), ["https://elsewhere.example/work"]);
+    assert.deepEqual(b.saved, ["https://a.example/"]);
+    const entries = Object.values(b.chrome.storage.local.data.pinLocations);
+    assert.deepEqual(entries, [{ key: "a.example/", url: "https://elsewhere.example/work" }]);
+    assert.ok(Object.values(ctl.bindings).includes("a.example/"));
   });
 });
