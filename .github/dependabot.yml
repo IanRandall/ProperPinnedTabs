@@ -1,0 +1,28 @@
+# Dependabot scans manifests on the default branch and opens pull requests
+# for outdated dependencies. Security update pull requests follow the same
+# ecosystems once Dependabot alerts are enabled for the repository.
+# https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference
+
+version: 2
+updates:
+  # package.json at the repo root. Tests currently use Node's built-in
+  # runner and declare no packages; this still covers dependencies if added.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Europe/London"
+    open-pull-requests-limit: 5
+
+  # Workflow files under .github/workflows (actions/checkout, actions/setup-node).
+  # directory must be "/" for the github-actions ecosystem.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Europe/London"
+    open-pull-requests-limit: 5
